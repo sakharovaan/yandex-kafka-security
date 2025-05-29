@@ -20,7 +20,7 @@ x-kafka-common:
     KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: 'true'
     KAFKA_TLS_CLIENT_AUTH: 'requested'
     KAFKA_CERTIFICATE_PASSWORD: your-password
-    KAFKA_CFG_LISTENER_NAME_EXTERNAL_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret";'
+    KAFKA_CFG_LISTENER_NAME_EXTERNAL_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret" user_consumer="consumer-secret" user_producer="producer-secret";'
     KAFKA_CFG_AUTHORIZER_CLASS_NAME: kafka.security.authorizer.AclAuthorizer
     KAFKA_CFG_SUPER_USERS: 'User:user;User:controller_user;User:admin'
     KAFKA_CFG_SASL_ENABLED_MECHANISMS: 'PLAIN'
@@ -61,6 +61,7 @@ services:
      - kafka_1_data:/bitnami/kafka
      - ./ssl/kafka-1-creds/kafka.kafka-1.keystore.pkcs12:/opt/bitnami/kafka/config/certs/kafka.keystore.jks:ro
      - ./ssl/kafka-1-creds/kafka.kafka-1.truststore.jks:/opt/bitnami/kafka/config/certs/kafka.truststore.jks:ro
+     - ./admin-config.conf:/admin-config.conf:ro
 
  kafka-2:
    <<: *kafka-common
@@ -111,6 +112,77 @@ services:
     - ./ssl/kafka-1-creds/kafka.kafka-1.truststore.jks:/kafka.kafka-1.truststore.jks:ro
    networks:
      - proxynet
+
+ schema-registry:
+    image: bitnami/schema-registry:7.9.0
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    ports:
+      - "8081:8081"
+    environment:
+      - BITNAMI_DEBUG=true
+      - SCHEMA_REGISTRY_KAFKA_BROKERS=SASL_SSL://kafka-1:9094,SASL_SSL://kafka-2:9095,SASL_SSL://kafka-3:9096
+      - SCHEMA_REGISTRY_KAFKA_SASL_USER=admin
+      - SCHEMA_REGISTRY_KAFKA_SASL_PASSWORD=admin-secret
+      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+      - SCHEMA_REGISTRY_KAFKA_TRUSTSTORE_PASSWORD=your-password
+      - SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081
+    volumes:
+      - ./ssl/kafka-1-creds/kafka.kafka-1.truststore.jks:/opt/bitnami/schema-registry/certs/schema-registry.truststore.jks:ro
+    networks:
+      - proxynet
+
+ producer:
+    build: 
+      context: producer
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+      - schema-registry
+    ports:
+      - "9000:9000"
+    environment:
+      - PRODUCER_KAFKA_BOOTSTRAP_SERVERS=kafka-1:9094,kafka-2:9095,kafka-3:9096
+      - PRODUCER_SCHEMA_REGISTRY_SERVER=http://schema-registry:8081
+      - PRODUCER_KAFKA_TOPIC=topic-1
+      - PRODUCER_KAFKA_USER=producer
+      - PRODUCER_KAFKA_PASSWORD=producer-secret
+      - PRODUCER_KAFKA_CA_PATH=/ca.crt
+    networks:
+      - proxynet
+    volumes:
+      - ./ssl/ca.crt:/ca.crt:ro
+
+ consumer:
+    build: 
+      context: consumer
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+      - schema-registry
+    deploy:
+      mode: replicated
+      replicas: 2
+    environment:
+      - CONSUMER_KAFKA_BOOTSTRAP_SERVERS=kafka-1:9094,kafka-2:9095,kafka-3:9096
+      - CONSUMER_SCHEMA_REGISTRY_SERVER=http://schema-registry:8081
+      - CONSUMER_KAFKA_TOPIC=topic-1
+      - CONSUMER_GROUP_ID=single-group
+      - CONSUMER_MESSAGES_BATCH_MIN=1
+      - CONSUMER_MESSAGES_BATCH_MAX=1
+      - CONSUMER_AUTO_COMMIT=true
+      - CONSUMER_POLL_INTERVAL_SECONDS=10
+      - CONSUMER_KAFKA_USER=consumer
+      - CONSUMER_KAFKA_PASSWORD=consumer-secret
+      - CONSUMER_KAFKA_CA_PATH=/ca.crt
+    networks:
+      - proxynet
+    volumes:
+      - ./ssl/ca.crt:/ca.crt:ro
 
 networks:
  proxynet:

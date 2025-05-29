@@ -1,4 +1,12 @@
-## Последовательность действий
+## Комментарии
+
+* Всё взаимоидействие с брокерами происходит с TLS и SASL, включая взаимодействие между брокерами (listener INTERNAL)
+* Используется Zookeeper, без KRaft
+* Управление кластером (запуск утилит) происходит с брокера kafka-1, туда смонтирован [админский конфиг](admin-config.conf)
+* Kafka UI и Schema registry настроены на работу с SASL_SSL и успешно работают
+* За основу Producer и Consumer была взята [Практическая работа 2](https://github.com/sakharovaan/yandex-kafka?tab=readme-ov-file), единственное изменение в них - добавление авторизации и SSL (в файле ./consumer|producer/src/main.py, функции start_producer и start_consumer)
+
+## Последовательность действий для запуска
 
 Создание CA
 * `openssl req -new -nodes -x509 -days 365 -newkey rsa:2048 -keyout ssl/ca.key -out ssl/ca.crt -config ssl/ca.cnf`
@@ -41,8 +49,49 @@ echo "your-password" > ssl/kafka-3-creds/kafka-3_keystore_creds
 echo "your-password" > ssl/kafka-3-creds/kafka-3_truststore_creds 
 ```
 
+Поднятие Kafka и Schema Registry
+```bash
+docker compose up -d schema-registry
+```
+
 Создание топиков
 ```bash
-docker compose exec kafka-1 kafka-topics.sh --create --topic topic-1 --bootstrap-server localhost:9092
-docker compose exec kafka-1 kafka-topics.sh --create --topic topic-2 --bootstrap-server localhost:9092
+docker compose exec kafka-1 kafka-topics.sh --create --topic topic-1 --bootstrap-server localhost:9094 --command-config /admin-config.conf
+docker compose exec kafka-1 kafka-topics.sh --create --topic topic-2 --bootstrap-server localhost:9094 --command-config /admin-config.conf
 ```
+
+Применим ACL к созданным топикам
+```bash
+docker compose exec kafka-1 kafka-acls.sh --bootstrap-server localhost:9094 --command-config /admin-config.conf --add --allow-principal User:consumer --operation Read --operation Write --operation Describe --topic topic-1 
+docker compose exec kafka-1 kafka-acls.sh --bootstrap-server localhost:9094 --command-config /admin-config.conf --add --allow-principal User:producer --operation Read --operation Write --operation Describe --topic topic-1 
+
+docker compose exec kafka-1 kafka-acls.sh --bootstrap-server localhost:9094 --command-config /admin-config.conf --add --allow-principal User:producer --operation Read --operation Write --operation Describe --topic topic-2
+```
+
+Применим ACL для консьюмера на доступ к группе
+```bash
+docker compose exec kafka-1 kafka-acls.sh --bootstrap-server localhost:9094 --command-config /admin-config.conf --add --allow-principal User:consumer --operation Read --operation Describe --group single-group
+```
+
+Запустим producer и consumer
+```bash
+docker compose up -d producer consumer
+```
+
+Отправим сообщения через producer
+```bash
+for i in $(seq 1 100); do curl -vv -XPOST -d '{"text": "message"}' -H "Content-Type: application/json" localhost:9000/api/v1/kafka/send; done
+```
+
+В логах consumer должны отображаться полученные сообщения
+```bash
+docker compose logs -f consumer
+```
+
+```json
+{"topic": "topic-1", "partition": 0, "offset": 987, "key": null, "message": {"text": "message"}, "timestamp": 1748544432459}
+```
+
+Скриншот ACL:
+
+![acl](img/acl.png)
